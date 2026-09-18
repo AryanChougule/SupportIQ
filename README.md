@@ -16,10 +16,12 @@ It provides:
 Clone the repository:
 
 ```bash
-In command Prompt
+In command Prompt run the following three commands
+
 git clone https://github.com/AryanChougule/SupportIQ.git
 cd SupportIQ
 start.bat
+
 Note: At start you have to provide the gemini api key to start
 ## Architecture
 
