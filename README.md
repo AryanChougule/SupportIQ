@@ -11,33 +11,16 @@ It provides:
 - FastAPI REST endpoints
 - A minimal Gradio UI mounted at `/`
 
-## Run with Docker
-
-### Prerequisites
-
-- Docker Desktop or Docker Engine
-- Internet connection for downloading Docker dependencies
-- A Gemini API key from Google AI Studio
-
 ### Run the application
 
 Clone the repository:
 
 ```bash
+In command Prompt
 git clone https://github.com/AryanChougule/SupportIQ.git
 cd SupportIQ
-
-### Setup
-
-Clone the repository:
-
-```bash
-git clone <https://github.com/AryanChougule/SupportIQ>
-cd supportiq
-bash start.sh
-
-
-
+start.bat
+Note: At start you have to provide the gemini api key to start
 ## Architecture
 
 ```text
@@ -61,6 +44,18 @@ Answer formatter
 ```
 
 Gemini is used for natural-language understanding and explanation. It does not directly execute SQL or determine numeric results.
+
+
+
+
+
+## Run with Docker
+
+### Prerequisites
+
+- Docker Desktop or Docker Engine
+- Internet connection for downloading Docker dependencies
+- A Gemini API key from Google AI Studio
 
 ## Dataset
 
