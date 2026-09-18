@@ -1,9 +1,13 @@
+
 import gradio as gr
 
 import json
+import logging
+import os
 import tempfile
 from pathlib import Path
-import logging
+
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +58,15 @@ CUSTOM_CSS = """
 #chatbot {
     border-radius: 12px;
 }
+
 /* Hide Gradio's Share button */
-button[aria-label="Share"],
-.share-button {
+#chatbot button[aria-label*="share" i],
+#chatbot button[title*="share" i],
+#chatbot button[data-testid*="share" i],
+#chatbot [class*="share" i] {
     display: none !important;
 }
+
 /* Input area */
 #question-input textarea {
     font-size: 15px !important;
@@ -93,10 +101,14 @@ button[aria-label="Share"],
     margin-top: 8px;
 }
 """
+
+
 def create_download_file(result: dict) -> str:
     """
-    Creates a temporary text file containing the complete query result.
-    Returns the file path for Gradio's DownloadButton.
+    Create a temporary text file containing the complete query result.
+
+    Returns:
+        str: File path for Gradio's DownloadButton.
     """
     answer = result.get("answer", "")
 
@@ -121,7 +133,7 @@ Raw Result:
         suffix=".txt",
         prefix="supportiq_report_",
         delete=False,
-        encoding="utf-8"
+        encoding="utf-8",
     )
 
     with temp_file:
@@ -129,14 +141,60 @@ Raw Result:
 
     return temp_file.name
 
+
+def get_env_file_path() -> Path:
+    """
+    Get the project's .env path.
+
+    This assumes that gradio_app.py is located inside the app/
+    directory and .env is located in the project root.
+    """
+    return Path(__file__).resolve().parent.parent / ".env"
+
+
+def save_api_key_to_env(api_key: str) -> None:
+    """
+    Save or update GEMINI_API_KEY in the project's .env file.
+    """
+    env_path = get_env_file_path()
+
+    if env_path.exists():
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    else:
+        lines = []
+
+    updated = False
+    new_lines = []
+
+    for line in lines:
+        if line.strip().startswith("GEMINI_API_KEY="):
+            new_lines.append(f"GEMINI_API_KEY={api_key}")
+            updated = True
+        else:
+            new_lines.append(line)
+
+    if not updated:
+        new_lines.append(f"GEMINI_API_KEY={api_key}")
+
+    env_path.write_text(
+        "\n".join(new_lines) + "\n",
+        encoding="utf-8",
+    )
+
+
 def build_ui(answer_service, anomaly_service, db):
 
     def validate_and_update_gemini_key(new_api_key):
+        """
+        Validate the API key through the planner and save it to .env.
+        """
         if not new_api_key or not new_api_key.strip():
             return (
                 "⚠️ Please enter a Gemini API key.",
                 "",
             )
+
+        new_api_key = new_api_key.strip()
 
         try:
             planner = getattr(
@@ -154,75 +212,154 @@ def build_ui(answer_service, anomaly_service, db):
                     "",
                 )
 
+            # Validate and apply the key to the running planner.
             message = planner.update_api_key(new_api_key)
+
+            # Save the key only after the planner accepts it.
+            save_api_key_to_env(new_api_key)
+
+            # Update the current process environment.
+            os.environ["GEMINI_API_KEY"] = new_api_key
+
+            # Refresh dotenv values for any code that reads them.
+            load_dotenv(
+                dotenv_path=get_env_file_path(),
+                override=True,
+            )
 
             return (
                 f"✅ {message}",
                 "",
             )
 
-        except Exception as exc:
+        except Exception:
+            logger.exception("Gemini API-key update failed")
+
             return (
-                f"❌ API-key validation failed: `{exc}`",
+                "❌ The API key could not be validated. "
+                "Please check the key and try again.",
                 "",
             )
 
     def run_query(question, history):
-        if not question.strip():
-            return history, history, "",  gr.update(value=None, visible=False)
+        """
+        Process a user question and return the updated chat state.
+        """
+        history = history or []
+
+        if not question or not question.strip():
+            return (
+                history,
+                history,
+                "",
+                gr.update(value=None, visible=False),
+            )
+
+        # Show a helpful message instead of a generic error when
+        # the Gemini API key has not been configured.
+        current_api_key = os.getenv("GEMINI_API_KEY", "").strip()
+
+        if (
+            not current_api_key
+            or current_api_key.lower() in {
+                "your_gemini_api_key_here",
+                "your_api_key_here",
+                "your_key_here",
+                "gemini_api_key",
+            }
+        ):
+            history.append({
+                "role": "user",
+                "content": question,
+            })
+            history.append({
+                "role": "assistant",
+                "content": (
+                    "🔑 **Gemini API key is not configured.**\n\n"
+                    "Please enter your Gemini API key in the "
+                    "**Gemini API Settings** panel on the right, "
+                    "then click **Validate & Save** and try again."
+                ),
+            })
+
+            return (
+                history,
+                history,
+                "",
+                gr.update(value=None, visible=False),
+            )
 
         try:
             result = answer_service.answer(question)
 
-            answer = result.get("answer", "No answer generated.")
+            answer = result.get(
+                "answer",
+                "No answer generated.",
+            )
 
-            # Add only text to the Chatbot
-            history = history or []
             history.append({
                 "role": "user",
-                "content": question
+                "content": question,
             })
             history.append({
                 "role": "assistant",
-                "content": answer
+                "content": answer,
             })
 
-            # Create downloadable report
             download_path = create_download_file(result)
 
-            return history, history, "", gr.update(value=download_path, visible=True)
+            return (
+                history,
+                history,
+                "",
+                gr.update(
+                    value=download_path,
+                    visible=True,
+                ),
+            )
 
-        except Exception as exc:
+        except Exception:
             logger.exception("UI query failed")
 
-            error_message = "An error occurred while processing your question."
-
-            history = history or []
             history.append({
                 "role": "user",
-                "content": question
+                "content": question,
             })
             history.append({
                 "role": "assistant",
-                "content": error_message
+                "content": (
+                    "⚠️ I couldn't process your question. "
+                    "Please verify your Gemini API key and try again."
+                ),
             })
 
-            return history, history, "", gr.update(value=None, visible=False)
+            return (
+                history,
+                history,
+                "",
+                gr.update(
+                    value=None,
+                    visible=False,
+                ),
+            )
 
     def clear_chat():
-        return [], [], "", gr.update(value=None, visible=False)
+        return (
+            [],
+            [],
+            "",
+            gr.update(
+                value=None,
+                visible=False,
+            ),
+        )
 
     with gr.Blocks(
         title="SupportIQ",
         css=CUSTOM_CSS,
     ) as demo:
 
-        # ─────────────────────────────────────────────
         # Header
-        # ─────────────────────────────────────────────
-
-
-        
         gr.Markdown(
             """
             <div class="app-header">
@@ -236,14 +373,10 @@ def build_ui(answer_service, anomaly_service, db):
             elem_classes=["app-header"],
         )
 
-        # ─────────────────────────────────────────────
         # Main dashboard
-        # ─────────────────────────────────────────────
-
         with gr.Row(equal_height=True):
 
-            # ──────────────── Left: Chat ────────────────
-
+            # Left: Chat
             with gr.Column(
                 scale=3,
                 elem_classes=["panel-card"],
@@ -276,20 +409,17 @@ def build_ui(answer_service, anomaly_service, db):
                         variant="primary",
                         scale=3,
                     )
+
                     download_button = gr.DownloadButton(
                         label="Download Report",
                         value=None,
-                        visible=False
+                        visible=False,
                     )
+
                     clear_button = gr.Button(
                         "🗑️ Clear",
                         scale=1,
                     )
-
-                status_box = gr.Markdown(
-                    "",
-                    elem_classes=["compact-text"],
-                )
 
                 gr.Markdown(
                     """
@@ -300,8 +430,7 @@ def build_ui(answer_service, anomaly_service, db):
                     """
                 )
 
-            # ──────────────── Right: Controls ────────────────
-
+            # Right: Controls
             with gr.Column(
                 scale=2,
                 elem_classes=["panel-card"],
@@ -341,7 +470,7 @@ def build_ui(answer_service, anomaly_service, db):
                 gr.Markdown(
                     """
                     <div class="compact-text">
-                        Add your Gemini API key to enable or update
+                        Add your Gemini API key to enable
                         LLM-powered responses.
                         <br><br>
                         <a href="https://aistudio.google.com/app/apikey"
@@ -395,10 +524,7 @@ def build_ui(answer_service, anomaly_service, db):
                     """
                 )
 
-        # ─────────────────────────────────────────────
         # State and events
-        # ─────────────────────────────────────────────
-
         state = gr.State([])
 
         submit_button.click(
